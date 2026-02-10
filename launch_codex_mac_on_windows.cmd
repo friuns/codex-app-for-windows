@@ -80,6 +80,18 @@ if exist "%REBUILD_MARKER%" (
 )
 
 REM ============================================================================
+REM Step 5b: Patch renderer for Windows (process polyfill)
+REM ============================================================================
+set "PATCH_MARKER=%APP_DIR%\.win-process-patched"
+if exist "%PATCH_MARKER%" (
+  echo       Windows renderer patch already applied, skipping
+) else (
+  echo       Applying Windows renderer patches...
+  call :patch_renderer "%APP_DIR%"
+  if errorlevel 1 ( echo [WARN] Renderer patch failed, app may crash )
+)
+
+REM ============================================================================
 REM Step 6: Launch with Electron
 REM ============================================================================
 echo [6/6] Launching app with Electron...
@@ -268,10 +280,52 @@ echo ok > "%RB_DIR%\.win-natives-ok"
 echo       Native modules ready
 exit /b 0
 
+:patch_renderer
+set "PATCH_DIR=%~1"
+set "PRELOAD_FILE=%PATCH_DIR%\.vite\build\preload.js"
+set "INDEX_HTML=%PATCH_DIR%\webview\index.html"
+
+REM ---- Patch preload.js: expose process shim to renderer ----
+if not exist "%PRELOAD_FILE%" (
+  echo [WARN] preload.js not found, skipping patch
+  exit /b 0
+)
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$f='%PRELOAD_FILE%';$c=Get-Content -Raw $f -Encoding UTF8;" ^
+  "if($c -match '__processShim'){Write-Host '      preload.js already patched';exit 0};" ^
+  "$shim='const _cwd=typeof process.cwd===\"function\"?process.cwd():\"C:\\\\\";const _platform=process.platform||\"win32\";const _version=process.version||\"\";const _arch=process.arch||\"x64\";const _pid=process.pid||0;const _execPath=process.execPath||\"\";const _envSrc=process.env||{};const _env={NODE_ENV:_envSrc.NODE_ENV||\"production\",HOME:_envSrc.HOME||_envSrc.USERPROFILE||\"\",APPDATA:_envSrc.APPDATA||\"\",SHELL:_envSrc.SHELL||_envSrc.COMSPEC||\"\",TERM:_envSrc.TERM||\"\",PATH:_envSrc.PATH||\"\",CODEX_CLI_PATH:_envSrc.CODEX_CLI_PATH||\"\"};const _versions=process.versions?{...process.versions}:{};';" ^
+  "$expose='n.contextBridge.exposeInMainWorld(\"__processShim\",{cwd:_cwd,platform:_platform,version:_version,arch:_arch,pid:_pid,execPath:_execPath,env:_env,versions:_versions,type:\"renderer\"});';" ^
+  "$c=$c.TrimEnd();$c=$c+\"`n\"+$shim+\"`n\"+$expose+\"`n\";" ^
+  "Set-Content $f $c -Encoding UTF8 -NoNewline;" ^
+  "Write-Host '      preload.js patched'"
+if errorlevel 1 ( echo [WARN] preload.js patch failed & exit /b 1 )
+
+REM ---- Patch index.html: inject process polyfill + update CSP ----
+if not exist "%INDEX_HTML%" (
+  echo [WARN] index.html not found, skipping patch
+  exit /b 0
+)
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$f='%INDEX_HTML%';$c=Get-Content -Raw $f -Encoding UTF8;" ^
+  "if($c -match '__processShim'){Write-Host '      index.html already patched';exit 0};" ^
+  "$polyfill='<script>window.process={...window.__processShim,cwd:function(){return window.__processShim.cwd},nextTick:function(cb){setTimeout(cb,0)},browser:false,argv:[],on:function(){return this},off:function(){return this},emit:function(){return this},removeListener:function(){return this},addListener:function(){return this},once:function(){return this},removeAllListeners:function(){return this},listeners:function(){return[]}};</script>';" ^
+  "$cspHash=\"'sha256-vUPPGezjwtwyPhhV6Lin1VeVqqLmju8YuY479tgImwU='\";" ^
+  "$c=$c -replace '<title>Codex</title>',('<title>Codex</title>`n    '+$polyfill);" ^
+  "$c=$c -replace \"'sha256-Z2/iFzh9VMlVkEOar1f/oSHWwQk3ve1qk/C2WdsC4Xk='\",\"'sha256-Z2/iFzh9VMlVkEOar1f/oSHWwQk3ve1qk/C2WdsC4Xk=' $cspHash\";" ^
+  "Set-Content $f $c -Encoding UTF8 -NoNewline;" ^
+  "Write-Host '      index.html patched'"
+if errorlevel 1 ( echo [WARN] index.html patch failed & exit /b 1 )
+
+echo ok > "%PATCH_DIR%\.win-process-patched"
+echo       Renderer patches applied
+exit /b 0
+
 :launch_electron
 set "APP_TO_RUN=%~1"
 set "ELECTRON_RUN_AS_NODE="
 set "ELECTRON_FORCE_IS_PACKAGED=true"
+REM Uncomment for verbose renderer logging (debug only):
+REM set "ELECTRON_ENABLE_LOGGING=true"
 
 REM ---- Resolve Codex CLI binary ----
 call :find_codex_cli

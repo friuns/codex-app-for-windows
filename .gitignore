@@ -1,0 +1,19 @@
+# Mac app binary (extracted)
+Codex.app/
+__MACOSX/
+test-extract/
+
+# Archive files
+*.zip
+*.dmg
+*.pkg
+*.tar.gz
+
+# Installers
+python-installer.exe
+vs_buildtools.exe
+
+# Temp helper scripts
+_check_app.ps1
+_setup_workdir.ps1
+_extract_cli_logic.ps1

@@ -5,6 +5,16 @@ Run the [OpenAI Codex Desktop](https://openai.com/index/introducing-codex/) app 
 
 https://github.com/user-attachments/assets/7fa4ffce-8639-4c80-b791-3b45126ee4a7
 
+## Captured Frames
+
+Frame at 30 seconds:
+
+![Frame at 30 seconds](/Users/igor/temp/linuxport/images/Cursor_giCQLZ2ZHl_40s_frame_30s.png)
+
+Last frame:
+
+![Last frame](/Users/igor/temp/linuxport/images/Cursor_giCQLZ2ZHl_40s_frame_last.png)
+
 
 ## Prerequisites
 

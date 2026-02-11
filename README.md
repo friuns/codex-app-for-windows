@@ -1,30 +1,35 @@
-# Codex Desktop on Windows
+# 🚀 Codex Desktop on Windows
 
-Run the [OpenAI Codex Desktop](https://openai.com/index/introducing-codex/) app on Windows by porting the official macOS Electron build.
+> Run the [OpenAI Codex Desktop](https://openai.com/index/introducing-codex/) app on Windows by porting the official macOS Electron build.
 
-## Screenshots
+## 🖼 Screenshots
 
-| Startup | Automations |
+| Startup | Running |
 |---|---|
-| ![Frame at 30 seconds](images/Cursor_giCQLZ2ZHl_40s_frame_30s.png) | ![Last frame](images/Cursor_giCQLZ2ZHl_40s_frame_last.png) |
+| ![Startup view](images/startup-frame.png) | ![Running view](images/Cursor_giCQLZ2ZHl_40s_frame_last.png) |
 
-## Demo Video
+## 🎬 Demo Video
 
 https://github.com/user-attachments/assets/7fa4ffce-8639-4c80-b791-3b45126ee4a7
 
-## Quick Start
+## ⚡ Quick Start
 
-Run this once:
+Run once:
 
 ```cmd
 launch_codex_mac_on_windows.cmd
 ```
 
-The launcher automatically installs dependencies, extracts/unpacks Codex, patches for Windows, and starts the app.
+What happens automatically:
 
-> First run can take a few minutes. Later runs are much faster due to caching in `%TEMP%\codex-electron-win\`.
+1. Installs missing dependencies.
+2. Extracts and unpacks Codex.
+3. Applies Windows compatibility patches.
+4. Launches the app.
 
-Optional input paths:
+> First run may take a few minutes. Later runs are faster due to caching in `%TEMP%\codex-electron-win\`.
+
+Optional inputs:
 
 ```cmd
 REM Use a DMG you already downloaded
@@ -34,7 +39,9 @@ REM Use a pre-extracted Codex.app
 launch_codex_mac_on_windows.cmd "C:\Downloads\Codex.app"
 ```
 
-## Prerequisites
+Then sign in with your OpenAI / ChatGPT account (active Codex subscription required).
+
+## ✅ Prerequisites
 
 | Requirement | Auto-installed? | Notes |
 |---|---|---|
@@ -46,7 +53,7 @@ launch_codex_mac_on_windows.cmd "C:\Downloads\Codex.app"
 | **Python 3.12** *(optional)* | Yes | Native module builds |
 | **VS Build Tools 2022** *(optional)* | Yes | `node-pty` compilation |
 
-## Re-run
+## 🔁 Re-run
 
 ```cmd
 launch_codex_mac_on_windows.cmd
@@ -54,7 +61,7 @@ launch_codex_mac_on_windows.cmd
 
 The script is idempotent and skips already-completed steps.
 
-## Update Codex
+## 🔄 Update Codex
 
 Replace with a newer DMG, then force a clean unpack:
 
@@ -63,7 +70,7 @@ rmdir /s /q "%TEMP%\codex-electron-win"
 launch_codex_mac_on_windows.cmd
 ```
 
-## Troubleshooting
+## 🛠 Troubleshooting
 
 ### App crashes (`Oops, an error has occurred`)
 
@@ -105,7 +112,7 @@ rmdir /s /q "%TEMP%\codex-electron-win"
 launch_codex_mac_on_windows.cmd
 ```
 
-## How It Works
+## 🧠 How It Works
 
 The launcher:
 
@@ -118,7 +125,7 @@ The launcher:
 
 See [guide.md](guide.md) for implementation details.
 
-## Repository Files
+## 📦 Repository Files
 
 | Path | Purpose |
 |---|---|

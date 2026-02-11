@@ -34,8 +34,6 @@ REM Use a pre-extracted Codex.app
 launch_codex_mac_on_windows.cmd "C:\Downloads\Codex.app"
 ```
 
-Then sign in with your OpenAI / ChatGPT account (active Codex subscription required).
-
 ## Prerequisites
 
 | Requirement | Auto-installed? | Notes |

@@ -2,6 +2,10 @@
 
 Run the [OpenAI Codex Desktop](https://openai.com/index/introducing-codex/) app on Windows -- ported from the official macOS Electron build.
 
+
+https://github.com/user-attachments/assets/7fa4ffce-8639-4c80-b791-3b45126ee4a7
+
+
 ## Prerequisites
 
 | Requirement | Install |

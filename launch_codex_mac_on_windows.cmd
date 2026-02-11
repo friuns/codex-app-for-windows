@@ -4,62 +4,138 @@ setlocal EnableExtensions EnableDelayedExpansion
 REM ============================================================================
 REM Codex Desktop on Windows -- launch script
 REM
-REM Expects a Codex.app folder (extracted from the official macOS DMG).
-REM If Codex.app is present next to this script it is used automatically.
-REM Otherwise pass the path to a Codex.app folder as the first argument.
+REM Accepts any of:
+REM   - No arguments     (auto-detects Codex.app or .dmg next to script)
+REM   - Path to Codex.app folder
+REM   - Path to a .dmg file (auto-extracted via 7-Zip)
+REM
+REM Missing tools (Node.js, 7-Zip, Python, VS Build Tools, @openai/codex)
+REM are downloaded and installed automatically via winget / npm.
 REM ============================================================================
 
 set "SCRIPT_DIR=%~dp0"
 set "CODEX_APP="
+set "DMG_FILE="
 
-REM ---- Auto-detect Codex.app next to this script ----
-if exist "%SCRIPT_DIR%Codex.app\Contents\Resources\app.asar" (
-  set "CODEX_APP=%SCRIPT_DIR%Codex.app"
-  echo [INFO] Found Codex.app next to script: !CODEX_APP!
-)
-
-REM ---- If a path was supplied on the command line, prefer it ----
-if not "%~1"=="" (
-  if exist "%~1\Contents\Resources\app.asar" (
-    set "CODEX_APP=%~1"
-    echo [INFO] Using supplied Codex.app: !CODEX_APP!
-  ) else (
-    echo [ERROR] "%~1" does not look like a valid Codex.app folder.
-    echo         Expected to find Contents\Resources\app.asar inside it.
-    goto :usage
-  )
-)
-
-REM ---- No Codex.app found anywhere -- guide the user ----
-if not defined CODEX_APP (
-  echo.
-  echo  ===================================================================
-  echo   Codex.app folder not found.
-  echo  ===================================================================
-  echo.
-  echo   To get the Codex.app folder:
-  echo.
-  echo   1. Download the official Codex DMG from OpenAI:
-  echo      https://openai.com/index/introducing-codex/
-  echo.
-  echo   2. Open the .dmg file (on a Mac, or use 7-Zip / HFSExplorer on
-  echo      Windows^) and copy the "Codex.app" folder out of it.
-  echo.
-  echo   3. Place the Codex.app folder next to this script:
-  echo      %SCRIPT_DIR%Codex.app\
-  echo.
-  echo   Then re-run this script. No arguments needed.
-  echo.
-  echo   Alternatively, pass the path to the Codex.app folder:
-  echo      %~nx0 "C:\path\to\Codex.app"
-  echo.
-  echo  ===================================================================
-  echo.
+REM ============================================================================
+REM Phase 0: Ensure required tools are installed
+REM ============================================================================
+call :ensure_tools
+if errorlevel 1 (
+  echo [FATAL] Could not install required tools. Exiting.
   exit /b 1
 )
 
 REM ============================================================================
-REM Persistent working directory - reuse previous work on re-run
+REM Phase 1: Locate Codex.app (from argument, .dmg, or auto-detect)
+REM ============================================================================
+
+REM ---- Check command-line argument ----
+if not "%~1"=="" (
+  REM Is it a .dmg file?
+  if /I "%~x1"==".dmg" (
+    if exist "%~1" (
+      set "DMG_FILE=%~1"
+      echo [INFO] DMG file supplied: !DMG_FILE!
+      goto :extract_dmg
+    ) else (
+      echo [ERROR] DMG file not found: %~1
+      goto :usage
+    )
+  )
+  REM Is it a Codex.app folder?
+  if exist "%~1\Contents\Resources\app.asar" (
+    set "CODEX_APP=%~1"
+    echo [INFO] Using supplied Codex.app: !CODEX_APP!
+    goto :have_app
+  )
+  REM Is it a folder containing Codex.app?
+  if exist "%~1\Codex.app\Contents\Resources\app.asar" (
+    set "CODEX_APP=%~1\Codex.app"
+    echo [INFO] Found Codex.app inside: !CODEX_APP!
+    goto :have_app
+  )
+  echo [ERROR] "%~1" is not a valid Codex.app folder or .dmg file.
+  goto :usage
+)
+
+REM ---- Auto-detect Codex.app next to script ----
+if exist "%SCRIPT_DIR%Codex.app\Contents\Resources\app.asar" (
+  set "CODEX_APP=%SCRIPT_DIR%Codex.app"
+  echo [INFO] Found Codex.app next to script: !CODEX_APP!
+  goto :have_app
+)
+
+REM ---- Auto-detect .dmg next to script ----
+for %%F in ("%SCRIPT_DIR%*.dmg") do (
+  if not defined DMG_FILE (
+    set "DMG_FILE=%%~fF"
+    echo [INFO] Found DMG next to script: !DMG_FILE!
+  )
+)
+if defined DMG_FILE goto :extract_dmg
+
+REM ---- Auto-detect .dmg in Downloads folder ----
+for %%F in ("%USERPROFILE%\Downloads\Codex*.dmg") do (
+  if not defined DMG_FILE (
+    set "DMG_FILE=%%~fF"
+    echo [INFO] Found DMG in Downloads: !DMG_FILE!
+  )
+)
+if defined DMG_FILE goto :extract_dmg
+
+REM ---- Nothing found -- download automatically ----
+echo.
+echo [INFO] Codex.app and .dmg not found locally. Downloading from OpenAI...
+set "DMG_DOWNLOAD_URL=https://persistent.oaistatic.com/codex-app-prod/Codex.dmg"
+set "DMG_FILE=%SCRIPT_DIR%Codex.dmg"
+echo       URL: %DMG_DOWNLOAD_URL%
+echo       Saving to: %DMG_FILE%
+echo.
+echo       Downloading... ^(this may take a minute^)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; try { Invoke-WebRequest -Uri '%DMG_DOWNLOAD_URL%' -OutFile '%DMG_FILE%' -UseBasicParsing } catch { Write-Host \"[ERROR] Download failed: $_\"; exit 1 }"
+if errorlevel 1 (
+  echo [ERROR] Failed to download Codex.dmg.
+  echo         Download manually from: https://openai.com/index/introducing-codex/
+  echo         Then place the .dmg next to this script and re-run.
+  exit /b 1
+)
+REM Verify the file was actually downloaded and has content
+if not exist "%DMG_FILE%" (
+  echo [ERROR] Download completed but file not found.
+  exit /b 1
+)
+for %%S in ("%DMG_FILE%") do (
+  if %%~zS LSS 1000000 (
+    echo [ERROR] Downloaded file is too small ^(%%~zS bytes^). May be an error page.
+    del "%DMG_FILE%" >nul 2>&1
+    exit /b 1
+  )
+  echo       Downloaded successfully: %%~zS bytes
+)
+echo.
+goto :extract_dmg
+
+REM ---- Extract Codex.app from DMG ----
+:extract_dmg
+echo.
+echo [DMG] Extracting Codex.app from: %DMG_FILE%
+call :extract_dmg_file "%DMG_FILE%" "%SCRIPT_DIR%"
+if errorlevel 1 (
+  echo [ERROR] Failed to extract Codex.app from DMG.
+  exit /b 1
+)
+if exist "%SCRIPT_DIR%Codex.app\Contents\Resources\app.asar" (
+  set "CODEX_APP=%SCRIPT_DIR%Codex.app"
+  echo [DMG] Extracted successfully: !CODEX_APP!
+) else (
+  echo [ERROR] Codex.app not found after DMG extraction.
+  exit /b 1
+)
+
+:have_app
+REM ============================================================================
+REM Phase 2: Set up working directory and run the porting steps
 REM ============================================================================
 set "WORKDIR=%TEMP%\codex-electron-win"
 set "APP_DIR=%WORKDIR%\app"
@@ -67,18 +143,12 @@ set "APP_ASAR=%CODEX_APP%\Contents\Resources\app.asar"
 set "ELECTRON_PACKAGE=electron"
 set "EXIT_CODE=1"
 
-REM Ensure Python + build tools are in PATH
-set "PATH=C:\Program Files\Python312;C:\Program Files\Python312\Scripts;%PATH%"
-
-REM Check required tools
-where node >nul 2>&1 || ( echo [ERROR] Node.js is required in PATH. & exit /b 1 )
-where npx >nul 2>&1  || ( echo [ERROR] npx is required in PATH. & exit /b 1 )
-
 mkdir "%WORKDIR%" >nul 2>&1
 
 REM ============================================================================
 REM Step 1: Unpack app.asar (skip if done)
 REM ============================================================================
+echo.
 echo [1/4] Checking app unpack...
 if exist "%APP_DIR%\package.json" (
   echo       Already unpacked, skipping
@@ -106,9 +176,7 @@ if exist "%REBUILD_MARKER%" (
   if errorlevel 1 ( echo [ERROR] Native module installation failed & goto :fail )
 )
 
-REM ============================================================================
-REM Step 3b: Patch renderer for Windows (process polyfill)
-REM ============================================================================
+REM ---- Patch renderer for Windows (process polyfill) ----
 set "PATCH_MARKER=%APP_DIR%\.win-process-patched"
 if exist "%PATCH_MARKER%" (
   echo       Windows renderer patch already applied, skipping
@@ -132,6 +200,253 @@ REM ============================================================================
 REM SUBROUTINES
 REM ============================================================================
 
+REM --------------------------------------------------------------------------
+REM :ensure_tools -- Check and auto-install all required tools
+REM --------------------------------------------------------------------------
+:ensure_tools
+
+REM ---- Check for winget (needed to install everything else) ----
+where winget >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] winget is not available. It ships with Windows 10 1709+ and Windows 11.
+  echo         Please install App Installer from the Microsoft Store.
+  exit /b 1
+)
+
+REM ---- Node.js ----
+where node >nul 2>&1
+if errorlevel 1 (
+  echo [SETUP] Node.js not found. Installing via winget...
+  winget install --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements -e
+  if errorlevel 1 (
+    echo [ERROR] Failed to install Node.js. Install manually: https://nodejs.org
+    exit /b 1
+  )
+  REM Refresh PATH and add common Node.js install locations as fallback
+  call :refresh_path
+  set "PATH=C:\Program Files\nodejs;%APPDATA%\npm;!PATH!"
+  where node >nul 2>&1
+  if errorlevel 1 (
+    echo [ERROR] Node.js installed but not in PATH. Please restart your terminal and re-run.
+    exit /b 1
+  )
+  echo [SETUP] Node.js installed successfully.
+)
+
+REM ---- npx (comes with Node.js, but verify) ----
+where npx >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] npx not found. It should come with Node.js.
+  echo         Try reinstalling Node.js: winget install OpenJS.NodeJS.LTS
+  exit /b 1
+)
+
+REM ---- 7-Zip (needed for DMG extraction) ----
+where 7z >nul 2>&1
+if errorlevel 1 (
+  echo [SETUP] 7-Zip not found. Installing via winget...
+  winget install --id 7zip.7zip --accept-source-agreements --accept-package-agreements -e
+  if errorlevel 1 (
+    echo [WARN] Failed to install 7-Zip. DMG extraction won't work.
+    echo        Install manually: https://www.7-zip.org
+  ) else (
+    call :refresh_path
+    call :add_7zip_to_path
+    echo [SETUP] 7-Zip installed successfully.
+  )
+)
+
+REM ---- Python (needed by node-gyp for native module compilation) ----
+where python >nul 2>&1
+if errorlevel 1 (
+  echo [SETUP] Python not found. Installing via winget...
+  winget install --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements -e
+  if errorlevel 1 (
+    echo [WARN] Failed to install Python. Native module compilation may fail.
+    echo        Install manually: https://www.python.org
+  ) else (
+    call :refresh_path
+    set "PATH=C:\Program Files\Python312;C:\Program Files\Python312\Scripts;%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python312\Scripts;!PATH!"
+    echo [SETUP] Python installed successfully.
+  )
+)
+
+REM ---- Ensure Python is in PATH (common install locations) ----
+set "PATH=C:\Program Files\Python312;C:\Program Files\Python312\Scripts;%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python312\Scripts;%PATH%"
+
+REM ---- @openai/codex CLI ----
+set "_CODEX_FOUND="
+call :find_codex_cli
+if not defined CODEX_CLI_PATH (
+  echo [SETUP] @openai/codex CLI not found. Installing via npm...
+  call npm install -g @openai/codex
+  if errorlevel 1 (
+    echo [WARN] Failed to install @openai/codex CLI.
+    echo        Install manually: npm install -g @openai/codex
+  ) else (
+    echo [SETUP] @openai/codex CLI installed successfully.
+  )
+)
+
+REM ---- Visual Studio Build Tools (optional, for node-pty) ----
+call :check_vctools
+
+if not defined HAS_VCTOOLS (
+  echo [SETUP] Visual Studio Build Tools not found.
+  echo         Installing via winget ^(needed for terminal/PTY support^)...
+  winget install --id Microsoft.VisualStudio.2022.BuildTools --accept-source-agreements --accept-package-agreements -e --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+  if errorlevel 1 (
+    echo [WARN] VS Build Tools install failed or was cancelled.
+    echo        Terminal/PTY features may not work without C++ build tools.
+    echo        Install manually: https://aka.ms/vs/17/release/vs_BuildTools.exe
+    echo        Select the Desktop development with C++ workload.
+  ) else (
+    echo [SETUP] VS Build Tools installed successfully.
+  )
+)
+
+echo [SETUP] All tools checked.
+exit /b 0
+
+REM --------------------------------------------------------------------------
+REM :refresh_path -- Reload PATH from the registry (picks up new installs)
+REM --------------------------------------------------------------------------
+:refresh_path
+set "SYS_PATH="
+set "USR_PATH="
+for /f "usebackq tokens=2,*" %%A in (`reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v PATH 2^>nul`) do set "SYS_PATH=%%B"
+for /f "usebackq tokens=2,*" %%A in (`reg query "HKCU\Environment" /v PATH 2^>nul`) do set "USR_PATH=%%B"
+if defined SYS_PATH (
+  if defined USR_PATH (
+    set "PATH=!USR_PATH!;!SYS_PATH!"
+  ) else (
+    set "PATH=!SYS_PATH!"
+  )
+)
+exit /b 0
+
+REM --------------------------------------------------------------------------
+REM :add_7zip_to_path -- Add common 7-Zip install locations to PATH
+REM   (Separated to avoid parentheses in "Program Files (x86)" breaking blocks)
+REM --------------------------------------------------------------------------
+:add_7zip_to_path
+set "PATH=C:\Program Files\7-Zip;C:\Program Files (x86)\7-Zip;%PATH%"
+exit /b 0
+
+REM --------------------------------------------------------------------------
+REM :check_vctools -- Check if Visual Studio Build Tools are installed
+REM   Sets HAS_VCTOOLS=1 if found, clears it otherwise.
+REM   (Separated to avoid parentheses in "Program Files (x86)" breaking blocks)
+REM --------------------------------------------------------------------------
+:check_vctools
+set "HAS_VCTOOLS="
+if exist "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC" set "HAS_VCTOOLS=1"
+if exist "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC" set "HAS_VCTOOLS=1"
+if exist "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC" set "HAS_VCTOOLS=1"
+if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\VC" set "HAS_VCTOOLS=1"
+if exist "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC" set "HAS_VCTOOLS=1"
+if exist "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC" set "HAS_VCTOOLS=1"
+exit /b 0
+
+REM --------------------------------------------------------------------------
+REM :extract_dmg_file -- Extract Codex.app from a .dmg using 7-Zip
+REM   %1 = path to .dmg file
+REM   %2 = destination directory (Codex.app will be placed here)
+REM --------------------------------------------------------------------------
+:extract_dmg_file
+set "DMG_SRC=%~1"
+set "DMG_DEST=%~2"
+set "DMG_WORK=%TEMP%\codex-dmg-extract"
+
+where 7z >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] 7-Zip is required to extract DMG files but was not found.
+  exit /b 1
+)
+
+REM Clean previous extraction
+if exist "%DMG_WORK%" rd /s /q "%DMG_WORK%" >nul 2>&1
+mkdir "%DMG_WORK%" >nul 2>&1
+
+echo       Step 1/3: Extracting DMG outer layer...
+7z x -y -o"%DMG_WORK%\dmg-layer1" "%DMG_SRC%" >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] 7-Zip failed to extract the DMG file.
+  exit /b 1
+)
+
+REM DMGs often contain an HFS+ image file (e.g. "2.hfs", "3.hfs", or similar)
+REM Try to find and extract it
+set "HFS_FILE="
+for /r "%DMG_WORK%\dmg-layer1" %%H in (*.hfs) do (
+  if not defined HFS_FILE set "HFS_FILE=%%~fH"
+)
+
+if defined HFS_FILE (
+  echo       Step 2/3: Extracting HFS+ filesystem...
+  7z x -y -o"%DMG_WORK%\dmg-layer2" "!HFS_FILE!" >nul 2>&1
+  if errorlevel 1 (
+    echo [WARN] HFS extraction failed, trying direct search...
+    set "DMG_SEARCH=%DMG_WORK%\dmg-layer1"
+  ) else (
+    set "DMG_SEARCH=%DMG_WORK%\dmg-layer2"
+  )
+) else (
+  REM No HFS found -- the first extraction might have gotten the files directly
+  set "DMG_SEARCH=%DMG_WORK%\dmg-layer1"
+)
+
+REM Find Codex.app inside the extracted content
+echo       Step 3/3: Locating Codex.app...
+set "FOUND_APP="
+for /f "delims=" %%D in ('dir /s /b /ad "!DMG_SEARCH!\Codex.app" 2^>nul') do (
+  if not defined FOUND_APP (
+    if exist "%%~fD\Contents\Resources\app.asar" (
+      set "FOUND_APP=%%~fD"
+    )
+  )
+)
+
+if not defined FOUND_APP (
+  REM Try looking for app.asar directly (some DMG structures differ)
+  for /f "delims=" %%A in ('dir /s /b "!DMG_SEARCH!\app.asar" 2^>nul') do (
+    if not defined FOUND_APP (
+      REM Walk up to find the .app folder
+      for %%P in ("%%~dpA..\..\..") do (
+        if exist "%%~fP\Contents\Resources\app.asar" (
+          set "FOUND_APP=%%~fP"
+        )
+      )
+    )
+  )
+)
+
+if not defined FOUND_APP (
+  echo [ERROR] Could not find Codex.app inside the DMG.
+  echo         Contents of extraction:
+  dir /s /b "!DMG_SEARCH!" 2>nul | findstr /I "\.app .asar" 2>nul
+  rd /s /q "%DMG_WORK%" >nul 2>&1
+  exit /b 1
+)
+
+REM Copy Codex.app to destination
+echo       Copying Codex.app to: %DMG_DEST%
+if exist "%DMG_DEST%Codex.app" rd /s /q "%DMG_DEST%Codex.app" >nul 2>&1
+xcopy "!FOUND_APP!" "%DMG_DEST%Codex.app\" /E /I /H /Y /Q >nul
+if errorlevel 1 (
+  echo [ERROR] Failed to copy Codex.app
+  rd /s /q "%DMG_WORK%" >nul 2>&1
+  exit /b 1
+)
+
+REM Clean up temp extraction
+rd /s /q "%DMG_WORK%" >nul 2>&1
+echo       DMG extraction complete.
+exit /b 0
+
+REM --------------------------------------------------------------------------
+REM :extract_asar -- Unpack app.asar into a directory
+REM --------------------------------------------------------------------------
 :extract_asar
 set "ASAR_FILE=%~1"
 set "ASAR_OUT=%~2"
@@ -142,6 +457,9 @@ if errorlevel 1 ( echo [ERROR] asar extract failed & exit /b 1 )
 echo       Unpacked successfully
 exit /b 0
 
+REM --------------------------------------------------------------------------
+REM :detect_electron_version -- Read Electron version from package.json
+REM --------------------------------------------------------------------------
 :detect_electron_version
 set "DETECT_DIR=%~1"
 set "DETECTED_ELECTRON="
@@ -157,11 +475,9 @@ if defined DETECTED_ELECTRON (
 )
 exit /b 0
 
-REM ============================================================================
-REM NATIVE MODULE INSTALLATION
-REM Prefer downloading precompiled binaries. Build from source only as fallback.
-REM ============================================================================
-
+REM --------------------------------------------------------------------------
+REM :install_native_modules -- Replace Mac native modules with Windows ones
+REM --------------------------------------------------------------------------
 :install_native_modules
 set "RB_DIR=%~1"
 
@@ -204,7 +520,7 @@ if exist "%BSQ_DIR%" (
 
   REM Verify the .node file exists
   if exist "%BSQ_DIR%\build\Release\better_sqlite3.node" (
-    echo       better-sqlite3: OK (precompiled)
+    echo       better-sqlite3: OK ^(precompiled^)
   ) else (
     echo [ERROR] better_sqlite3.node not found after extraction
     exit /b 1
@@ -214,45 +530,36 @@ if exist "%BSQ_DIR%" (
   powershell -NoProfile -ExecutionPolicy Bypass -Command "$f='%BSQ_DIR%\package.json';$j=Get-Content -Raw $f|ConvertFrom-Json;$j.version='!BSQ_PREBUILD_VER!';$j|ConvertTo-Json -Depth 10|Set-Content $f -Encoding UTF8"
 )
 
-REM ---- node-pty: download prebuilt or build from source ----
+REM ---- node-pty: compile from source with @electron/rebuild ----
 echo.
 echo       === node-pty ===
 set "NPTY_DIR=%RB_DIR%\node_modules\node-pty"
-if exist "%NPTY_DIR%" (
-  REM Clean old Mac artifacts
-  if exist "%NPTY_DIR%\build" rd /s /q "%NPTY_DIR%\build" >nul 2>&1
-  if exist "%NPTY_DIR%\prebuilds" rd /s /q "%NPTY_DIR%\prebuilds" >nul 2>&1
+if not exist "%NPTY_DIR%" goto :npty_skip
 
-  REM node-pty has no prebuilts on GitHub. Try @electron/rebuild with VS Build Tools.
-  echo       node-pty requires compilation. Checking build tools...
+REM Clean old Mac artifacts
+if exist "%NPTY_DIR%\build" rd /s /q "%NPTY_DIR%\build" >nul 2>&1
+if exist "%NPTY_DIR%\prebuilds" rd /s /q "%NPTY_DIR%\prebuilds" >nul 2>&1
 
-  REM Check for VS Build Tools
-  set "HAS_VCTOOLS="
-  if exist "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC" set "HAS_VCTOOLS=1"
-  if exist "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC" set "HAS_VCTOOLS=1"
-  if exist "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC" set "HAS_VCTOOLS=1"
-  if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\VC" set "HAS_VCTOOLS=1"
-
-  if not defined HAS_VCTOOLS (
-    echo [WARN] Visual Studio Build Tools not found.
-    echo       node-pty cannot be compiled. PTY/terminal features may not work.
-    echo       Install VS Build Tools: https://aka.ms/vs/17/release/vs_BuildTools.exe
-    echo       Select "Desktop development with C++" workload.
-    goto :npty_skip
-  )
-
-  echo       Building node-pty with @electron/rebuild...
-  pushd "%RB_DIR%"
-  call npx -y @electron/rebuild --version 40.0.0 --module-dir node_modules/node-pty --force 2>&1
-  set "NPTY_RC=%ERRORLEVEL%"
-  popd
-
-  if !NPTY_RC! == 0 (
-    echo       node-pty: OK (compiled)
-  ) else (
-    echo [WARN] node-pty build failed. PTY features may not work.
-  )
+REM Check for VS Build Tools
+call :check_vctools
+if not defined HAS_VCTOOLS (
+  echo [WARN] Visual Studio Build Tools not found.
+  echo       node-pty cannot be compiled. PTY/terminal features may not work.
+  goto :npty_skip
 )
+
+echo       Building node-pty with @electron/rebuild...
+pushd "%RB_DIR%"
+call npx -y @electron/rebuild --version 40.0.0 --module-dir node_modules/node-pty --force 2>&1
+set "NPTY_RC=%ERRORLEVEL%"
+popd
+
+if !NPTY_RC! == 0 (
+  echo       node-pty: OK (compiled^)
+) else (
+  echo [WARN] node-pty build failed. PTY features may not work.
+)
+
 :npty_skip
 
 REM ---- Clean up stale Mac files ----
@@ -265,6 +572,9 @@ echo ok > "%RB_DIR%\.win-natives-ok"
 echo       Native modules ready
 exit /b 0
 
+REM --------------------------------------------------------------------------
+REM :patch_renderer -- Inject process polyfill into the renderer
+REM --------------------------------------------------------------------------
 :patch_renderer
 set "PATCH_DIR=%~1"
 set "PRELOAD_FILE=%PATCH_DIR%\.vite\build\preload.js"
@@ -305,6 +615,9 @@ echo ok > "%PATCH_DIR%\.win-process-patched"
 echo       Renderer patches applied
 exit /b 0
 
+REM --------------------------------------------------------------------------
+REM :launch_electron -- Start the app with Electron
+REM --------------------------------------------------------------------------
 :launch_electron
 set "APP_TO_RUN=%~1"
 set "ELECTRON_RUN_AS_NODE="
@@ -313,7 +626,13 @@ set "ELECTRON_FORCE_IS_PACKAGED=true"
 REM ---- Resolve Codex CLI binary ----
 call :find_codex_cli
 if not defined CODEX_CLI_PATH (
-  echo [ERROR] Codex CLI binary not found. Install with: npm install -g @openai/codex
+  echo [WARN] Codex CLI binary not found. Attempting install...
+  call npm install -g @openai/codex
+  call :find_codex_cli
+)
+if not defined CODEX_CLI_PATH (
+  echo [ERROR] Codex CLI binary not found even after install attempt.
+  echo         Install manually: npm install -g @openai/codex
   exit /b 1
 )
 echo       Codex CLI: %CODEX_CLI_PATH%
@@ -322,10 +641,11 @@ echo       Running: npx %ELECTRON_PACKAGE% "%APP_TO_RUN%"
 call npx -y %ELECTRON_PACKAGE% "%APP_TO_RUN%"
 exit /b %ERRORLEVEL%
 
+REM --------------------------------------------------------------------------
+REM :find_codex_cli -- Locate the codex.exe binary
+REM --------------------------------------------------------------------------
 :find_codex_cli
 set "CODEX_CLI_PATH="
-REM Already set by user?
-if defined CODEX_CLI_PATH if exist "%CODEX_CLI_PATH%" exit /b 0
 
 REM Check npm global install: @openai/codex vendor binaries
 set "_NPM_PREFIX="
@@ -357,19 +677,20 @@ REM ============================================================================
 :usage
 echo.
 echo Usage:
-echo   %~nx0 [path\to\Codex.app]
+echo   %~nx0 [path\to\Codex.app ^| path\to\Codex.dmg]
 echo.
 echo   Runs the macOS Codex Desktop app on Windows via Electron.
+echo   Everything is automatic -- tools, DMG download, extraction, patching.
 echo.
-echo   If Codex.app is placed next to this script, no arguments are needed.
-echo   Otherwise, pass the path to the Codex.app folder.
-echo.
-echo   To get Codex.app, download the official DMG from OpenAI, open it,
-echo   and copy the Codex.app folder out.
+echo   The script accepts:
+echo     - No arguments: auto-detects locally, or downloads from OpenAI
+echo     - A Codex.app folder
+echo     - A .dmg file
 echo.
 echo Examples:
 echo   %~nx0
 echo   %~nx0 "C:\Downloads\Codex.app"
+echo   %~nx0 "C:\Downloads\Codex.dmg"
 echo.
 echo Working directory: %TEMP%\codex-electron-win
 echo   Delete this folder to force a fresh start.

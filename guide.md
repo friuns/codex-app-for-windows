@@ -14,22 +14,27 @@ The entire workflow is automated by `launch_codex_mac_on_windows.cmd`.
 
 ## Prerequisites
 
-| Tool | Purpose | Install |
-|------|---------|---------|
-| **Node.js** (v20+) | JavaScript runtime + npm/npx | https://nodejs.org |
-| **Python 3.12** | Required by node-gyp for native compilation | https://www.python.org |
-| **Visual Studio Build Tools 2022** | C++ compiler for native Node.js addons | https://aka.ms/vs/17/release/vs_BuildTools.exe (select "Desktop development with C++") |
+All tools below are **auto-installed** by the script if missing (via `winget` and `npm`):
+
+| Tool | Purpose | Auto-install method |
+|------|---------|---------------------|
+| **winget** | Package manager (installs everything else) | Ships with Windows 10 1709+ / Windows 11 |
+| **Node.js** (v20+) | JavaScript runtime + npm/npx | `winget install OpenJS.NodeJS.LTS` |
+| **7-Zip** | Extracting `.dmg` files on Windows | `winget install 7zip.7zip` |
+| **Python 3.12** | Required by node-gyp for native compilation | `winget install Python.Python.3.12` |
+| **Visual Studio Build Tools 2022** | C++ compiler for native Node.js addons | `winget install Microsoft.VisualStudio.2022.BuildTools` |
 | **@openai/codex CLI** | The Codex CLI binary the app communicates with | `npm install -g @openai/codex` |
+
+The script checks for each tool at startup and installs any that are missing. PATH is refreshed from the registry after each install so the new tools are available immediately.
 
 ---
 
 ## Architecture
 
 ```
-Codex-mac-full.zip           (Mac archive, downloaded or local)
-  └── Codex.app/
-       └── Contents/Resources/
-            └── app.asar      (Electron archive containing the full app)
+Codex.app/                 (extracted from DMG by the user)
+  └── Contents/Resources/
+       └── app.asar        (Electron archive containing the full app)
 
 app.asar  ──(npx @electron/asar extract)──►  unpacked app/
   ├── package.json            (Electron entry point, dependencies)
@@ -54,22 +59,28 @@ app runs on Windows.
 
 ## Step-by-Step Porting Process
 
-### Step 1: Acquire the Mac Archive
+### Step 0: Obtain the Codex DMG or Codex.app
 
-The script accepts either a local `.zip` path or an HTTPS URL. It caches the
-archive at `%TEMP%\codex-electron-win\codex-mac.zip` so subsequent runs skip
-the download.
+The user downloads the official Codex DMG from OpenAI. The script accepts either:
 
-```
-launch_codex_mac_on_windows.cmd "C:\Downloads\Codex-mac-full.zip"
-```
+- **A `.dmg` file** -- placed next to the script, in the user's Downloads folder,
+  or passed as a command-line argument. The script extracts `Codex.app` from it
+  automatically using 7-Zip (installed automatically if missing).
+- **A `Codex.app` folder** -- if already extracted (e.g. on a Mac), placed next to
+  the script or passed as an argument.
 
-### Step 2: Extract the Archive
+**DMG extraction process** (fully automated):
+1. 7-Zip extracts the outer DMG container
+2. If an HFS+ filesystem image is found inside (e.g. `2.hfs`), 7-Zip extracts that too
+3. The script searches the extracted contents for `Codex.app/Contents/Resources/app.asar`
+4. `Codex.app` is copied next to the script for future runs
 
-PowerShell `Expand-Archive` unzips the `.zip` into `%TEMP%\codex-electron-win\extracted\`.
-The script looks for the `Codex.app` bundle inside.
+**Search order** for auto-detection (no arguments):
+1. `Codex.app` next to the script
+2. Any `*.dmg` file next to the script
+3. Any `Codex*.dmg` in the user's Downloads folder
 
-### Step 3: Locate and Unpack `app.asar`
+### Step 1: Locate and Unpack `app.asar`
 
 The core application code lives in `Codex.app/Contents/Resources/app.asar`.
 This is Electron's archive format. We unpack it with:
@@ -81,13 +92,13 @@ npx -y @electron/asar extract <app.asar path> <output dir>
 This produces a full `app/` directory with `package.json`, source bundles,
 and `node_modules/`.
 
-### Step 4: Detect Electron Version
+### Step 2: Detect Electron Version
 
 The script reads `package.json` to find the exact Electron version used by the
 app (e.g. `electron@40.0.0`). This is critical because native modules must be
 compiled against the same **ABI (Application Binary Interface)** version.
 
-### Step 5: Replace Native Modules
+### Step 3: Replace Native Modules
 
 This is the hardest part. The Mac archive ships with `.dylib` and Darwin `.node`
 binaries that won't load on Windows.
@@ -111,30 +122,22 @@ Steps:
 
 #### node-pty
 
-**Strategy**: Install a fresh Windows-compatible version.
+**Strategy**: Compile from source using Visual Studio Build Tools.
 
 `node-pty` provides pseudo-terminal (PTY) support. The Mac version ships with
 Darwin-only `spawn-helper` and `pty.node`. On Windows, node-pty needs either
 ConPTY (modern) or WinPTY (legacy) support.
 
-**Approach A** -- Isolated npm install (what worked):
-```
-mkdir %TEMP%\npty-install
-cd %TEMP%\npty-install
-npm init -y
-npm install node-pty@1.1.0
-xcopy node_modules\node-pty <app>\node_modules\node-pty /E /I /Y
-```
+The script uses `@electron/rebuild` to compile node-pty against the correct
+Electron ABI:
 
-This avoids conflicts with `workspace:*` dependencies in the app's
-`package.json` and provides a fully compiled Windows binary with ConPTY support.
-
-**Approach B** -- `@electron/rebuild` (may fail if Mac source lacks `winpty.gyp`):
 ```
 npx -y @electron/rebuild --version 40.0.0 --module-dir node_modules/node-pty --force
 ```
 
-This failed because the Mac-packaged source didn't include `deps/winpty/src/winpty.gyp`.
+This requires Visual Studio Build Tools with the "Desktop development with C++"
+workload. If build tools are not available, terminal features are disabled but
+the rest of the app works fine.
 
 #### Other Mac-only Files
 
@@ -142,7 +145,7 @@ This failed because the Mac-packaged source didn't include `deps/winpty/src/winp
 - `sparkle.node` (Mac auto-update framework) is ignored
 - `fsevents` (Mac filesystem watcher) is not needed on Windows
 
-### Step 5b: Patch the Renderer (Process Polyfill)
+### Step 3b: Patch the Renderer (Process Polyfill)
 
 The webview (renderer process) references `process.platform`, `process.cwd()`,
 and other Node.js globals that Electron sandboxes away. We patch two files:
@@ -176,16 +179,16 @@ window.process = {
 
 The Content-Security-Policy header is also updated with the script's hash.
 
-### Step 6: Resolve the Codex CLI
+### Step 4: Resolve the Codex CLI
 
 The app expects a `codex.exe` binary to communicate with. The script looks in:
 1. `CODEX_CLI_PATH` environment variable
 2. npm global prefix: `node_modules/@openai/codex/vendor/x86_64-pc-windows-msvc/codex/codex.exe`
 3. `where codex.exe` (PATH search)
 
-If not found, install with: `npm install -g @openai/codex`
+If not found, the script automatically runs `npm install -g @openai/codex`.
 
-### Step 7: Launch with Electron
+### Step 5: Launch with Electron
 
 ```
 npx -y electron@40.0.0 "%TEMP%\codex-electron-win\app"
@@ -201,12 +204,14 @@ Environment variables set:
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Archive extraction | Working | Cached, skips on re-run |
+| Auto-install missing tools | **Working** | Node.js, 7-Zip, Python, VS Build Tools, Codex CLI |
+| DMG auto-extraction | **Working** | 7-Zip extracts Codex.app from .dmg automatically |
+| Codex.app auto-detection | Working | Finds Codex.app, .dmg next to script, in Downloads, or via argument |
 | app.asar unpacking | Working | Uses `@electron/asar` |
 | Electron version detection | Working | Reads from `package.json` |
 | better-sqlite3 | Working | Precompiled binary from GitHub |
 | node-pty | Working | Compiled via `@electron/rebuild` (requires VS Build Tools) |
-| Codex CLI resolution | Working | Found via npm global prefix |
+| Codex CLI resolution | Working | Auto-installed via npm if missing |
 | App launch | **Working** | Window opens, authenticates, loads full UI |
 | Renderer process polyfill | **Working** | `process` shim injected into renderer |
 | Terminal/PTY | Working | Terminal attaches and shell spawns |
@@ -236,7 +241,7 @@ build these are available (likely via `nodeIntegration` or a build-time
 polyfill), but when running through a standalone Windows Electron via `npx`,
 the renderer is sandboxed and `process` is `undefined`.
 
-**Fix** (automated in step 5b of the launch script):
+**Fix** (automated in step 3b of the launch script):
 
 1. **preload.js** -- Append code that captures `process` data in the preload
    context (where Node.js is available) and exposes it to the renderer via
@@ -261,7 +266,9 @@ cached via a `.win-process-patched` marker file.
 
 ```
 codexwin/
-├── launch_codex_mac_on_windows.cmd   (main porting script)
+├── Codex.app/                         (extracted from DMG -- auto or manual)
+├── Codex*.dmg                         (optional -- auto-extracted on first run)
+├── launch_codex_mac_on_windows.cmd    (main porting script)
 ├── README.md                          (quick-start instructions)
 ├── guide.md                           (this file -- deep technical guide)
 └── .gitignore                         (excludes binaries and temp files)
@@ -270,9 +277,6 @@ codexwin/
 Working directory (cached, not in repo):
 ```
 %TEMP%\codex-electron-win/
-├── codex-mac.zip              (cached archive)
-├── extracted/
-│   └── Codex.app/             (extracted Mac bundle)
 ├── app/                       (unpacked asar -- the actual app code)
 │   ├── package.json
 │   ├── .vite/build/           (main process + preload)
@@ -294,13 +298,13 @@ Install the CLI: `npm install -g @openai/codex`
 Delete the marker file and re-run:
 ```
 del "%TEMP%\codex-electron-win\app\.win-natives-ok"
-launch_codex_mac_on_windows.cmd "C:\Downloads\Codex-mac-full.zip"
+launch_codex_mac_on_windows.cmd
 ```
 
 ### Force a completely fresh start
 ```
 rmdir /s /q "%TEMP%\codex-electron-win"
-launch_codex_mac_on_windows.cmd "C:\Downloads\Codex-mac-full.zip"
+launch_codex_mac_on_windows.cmd
 ```
 
 ### Disk cache errors
@@ -309,7 +313,7 @@ affect functionality. Caused by multiple Electron instances sharing cache dirs.
 
 ### "Oops, an error has occurred" / ReferenceError: process is not defined
 This was the main porting blocker. It is now fixed by the renderer patch
-(step 5b). If it reappears after a Codex update changes the webview bundle:
+(step 3b). If it reappears after a Codex update changes the webview bundle:
 ```
 del "%TEMP%\codex-electron-win\app\.win-process-patched"
 ```
@@ -328,15 +332,17 @@ rmdir /s /q "%TEMP%\codex-electron-win\app"
 
 ## Tools & Versions Used
 
+- **winget** (Windows Package Manager) -- auto-installs missing tools
+- **7-Zip** -- DMG extraction on Windows
 - Node.js 22.15.0
 - npm 10.9.2
 - Electron 40.0.0 (matched from app's `package.json`)
 - Python 3.12 (for node-gyp / native compilation)
 - Visual Studio Build Tools 2022 (C++ workload)
 - `@electron/asar` (asar extraction)
-- `@electron/rebuild` (attempted for node-pty)
+- `@electron/rebuild` (for node-pty compilation)
 - `better-sqlite3@12.6.2` (prebuilt for electron-v143-win32-x64)
-- `node-pty@1.1.0` (installed via isolated npm)
+- `node-pty@1.1.0` (compiled via @electron/rebuild)
 - `@openai/codex` (CLI binary)
 
 ---
@@ -380,3 +386,19 @@ rmdir /s /q "%TEMP%\codex-electron-win\app"
    Electron app with a Content-Security-Policy, the SHA-256 hash of the script
    content must be added to the `script-src` directive. Even a single byte
    difference (whitespace, newline) will cause the script to be blocked.
+
+9. **DMG extraction on Windows requires two passes.** 7-Zip can open `.dmg` files
+   but the first extraction yields an HFS+ filesystem image (e.g. `2.hfs`).
+   A second 7-Zip extraction on the `.hfs` file reveals the actual `Codex.app`
+   directory. The script automates both passes.
+
+10. **`winget` makes zero-prerequisite scripts possible.** Since `winget` ships
+    with modern Windows, the script can bootstrap its entire toolchain (Node.js,
+    7-Zip, Python, VS Build Tools) without asking the user to install anything
+    manually. The key trick is refreshing PATH from the registry after each
+    install so newly installed tools are available in the same shell session.
+
+11. **Auto-install should be graceful.** Not all tools are critical. Node.js is
+    mandatory (exit if missing), but Python and VS Build Tools are optional
+    (warn and continue). This lets the core app work even if compilation tools
+    can't be installed (e.g. restricted corporate environments).

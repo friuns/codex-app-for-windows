@@ -1,18 +1,69 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-if "%~1"=="" goto :usage
+REM ============================================================================
+REM Codex Desktop on Windows -- launch script
+REM
+REM Expects a Codex.app folder (extracted from the official macOS DMG).
+REM If Codex.app is present next to this script it is used automatically.
+REM Otherwise pass the path to a Codex.app folder as the first argument.
+REM ============================================================================
 
-set "SOURCE=%~1"
+set "SCRIPT_DIR=%~dp0"
+set "CODEX_APP="
+
+REM ---- Auto-detect Codex.app next to this script ----
+if exist "%SCRIPT_DIR%Codex.app\Contents\Resources\app.asar" (
+  set "CODEX_APP=%SCRIPT_DIR%Codex.app"
+  echo [INFO] Found Codex.app next to script: !CODEX_APP!
+)
+
+REM ---- If a path was supplied on the command line, prefer it ----
+if not "%~1"=="" (
+  if exist "%~1\Contents\Resources\app.asar" (
+    set "CODEX_APP=%~1"
+    echo [INFO] Using supplied Codex.app: !CODEX_APP!
+  ) else (
+    echo [ERROR] "%~1" does not look like a valid Codex.app folder.
+    echo         Expected to find Contents\Resources\app.asar inside it.
+    goto :usage
+  )
+)
+
+REM ---- No Codex.app found anywhere -- guide the user ----
+if not defined CODEX_APP (
+  echo.
+  echo  ===================================================================
+  echo   Codex.app folder not found.
+  echo  ===================================================================
+  echo.
+  echo   To get the Codex.app folder:
+  echo.
+  echo   1. Download the official Codex DMG from OpenAI:
+  echo      https://openai.com/index/introducing-codex/
+  echo.
+  echo   2. Open the .dmg file (on a Mac, or use 7-Zip / HFSExplorer on
+  echo      Windows^) and copy the "Codex.app" folder out of it.
+  echo.
+  echo   3. Place the Codex.app folder next to this script:
+  echo      %SCRIPT_DIR%Codex.app\
+  echo.
+  echo   Then re-run this script. No arguments needed.
+  echo.
+  echo   Alternatively, pass the path to the Codex.app folder:
+  echo      %~nx0 "C:\path\to\Codex.app"
+  echo.
+  echo  ===================================================================
+  echo.
+  exit /b 1
+)
 
 REM ============================================================================
-REM Persistent working directory - reuse previous extraction on re-run
+REM Persistent working directory - reuse previous work on re-run
 REM ============================================================================
 set "WORKDIR=%TEMP%\codex-electron-win"
-set "ARCHIVE=%WORKDIR%\codex-mac.zip"
-set "EXTRACT_DIR=%WORKDIR%\extracted"
 set "APP_DIR=%WORKDIR%\app"
-set "APP_ASAR="
+set "APP_ASAR=%CODEX_APP%\Contents\Resources\app.asar"
 set "ELECTRON_PACKAGE=electron"
 set "EXIT_CODE=1"
 
@@ -23,36 +74,12 @@ REM Check required tools
 where node >nul 2>&1 || ( echo [ERROR] Node.js is required in PATH. & exit /b 1 )
 where npx >nul 2>&1  || ( echo [ERROR] npx is required in PATH. & exit /b 1 )
 
-REM ============================================================================
-REM Step 1: Acquire archive (skip if already present)
-REM ============================================================================
-echo [1/6] Checking archive...
-if exist "%ARCHIVE%" (
-  echo       Archive already cached, skipping
-) else (
-  mkdir "%WORKDIR%" >nul 2>&1
-  call :acquire_archive "%SOURCE%" "%ARCHIVE%"
-  if errorlevel 1 goto :fail
-)
+mkdir "%WORKDIR%" >nul 2>&1
 
 REM ============================================================================
-REM Step 2: Extract archive + find app.asar (skip if done)
+REM Step 1: Unpack app.asar (skip if done)
 REM ============================================================================
-echo [2/6] Checking extraction...
-if exist "%EXTRACT_DIR%\Codex.app" (
-  echo       Already extracted, skipping
-  call :find_app_asar "%EXTRACT_DIR%"
-) else (
-  mkdir "%EXTRACT_DIR%" >nul 2>&1
-  call :extract_and_find_asar "%ARCHIVE%" "%EXTRACT_DIR%"
-  if errorlevel 1 goto :fail
-)
-if not defined APP_ASAR ( echo [ERROR] app.asar not found & goto :fail )
-
-REM ============================================================================
-REM Step 3: Unpack app.asar (skip if done)
-REM ============================================================================
-echo [3/6] Checking app unpack...
+echo [1/4] Checking app unpack...
 if exist "%APP_DIR%\package.json" (
   echo       Already unpacked, skipping
 ) else (
@@ -61,16 +88,16 @@ if exist "%APP_DIR%\package.json" (
 )
 
 REM ============================================================================
-REM Step 4: Detect Electron version
+REM Step 2: Detect Electron version
 REM ============================================================================
-echo [4/6] Detecting Electron version...
+echo [2/4] Detecting Electron version...
 call :detect_electron_version "%APP_DIR%"
 echo       Using: %ELECTRON_PACKAGE%
 
 REM ============================================================================
-REM Step 5: Install precompiled native modules for Windows (skip if done)
+REM Step 3: Install precompiled native modules for Windows (skip if done)
 REM ============================================================================
-echo [5/6] Checking native modules...
+echo [3/4] Checking native modules...
 set "REBUILD_MARKER=%APP_DIR%\.win-natives-ok"
 if exist "%REBUILD_MARKER%" (
   echo       Native modules already installed, skipping
@@ -80,7 +107,7 @@ if exist "%REBUILD_MARKER%" (
 )
 
 REM ============================================================================
-REM Step 5b: Patch renderer for Windows (process polyfill)
+REM Step 3b: Patch renderer for Windows (process polyfill)
 REM ============================================================================
 set "PATCH_MARKER=%APP_DIR%\.win-process-patched"
 if exist "%PATCH_MARKER%" (
@@ -92,9 +119,9 @@ if exist "%PATCH_MARKER%" (
 )
 
 REM ============================================================================
-REM Step 6: Launch with Electron
+REM Step 4: Launch with Electron
 REM ============================================================================
-echo [6/6] Launching app with Electron...
+echo [4/4] Launching app with Electron...
 call :launch_electron "%APP_DIR%"
 set "EXIT_CODE=%ERRORLEVEL%"
 echo.
@@ -104,48 +131,6 @@ goto :done
 REM ============================================================================
 REM SUBROUTINES
 REM ============================================================================
-
-:acquire_archive
-set "SRC=%~1"
-set "DEST=%~2"
-set "IS_URL="
-if /I "%SRC:~0,7%"=="http://" set "IS_URL=1"
-if /I "%SRC:~0,8%"=="https://" set "IS_URL=1"
-if defined IS_URL (
-  echo       Downloading: %SRC%
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '%SRC%' -OutFile '%DEST%'"
-  if errorlevel 1 ( echo [ERROR] Download failed & exit /b 1 )
-  exit /b 0
-)
-if not exist "%SRC%" ( echo [ERROR] Source not found: %SRC% & exit /b 1 )
-echo       Copying local archive...
-copy /y "%SRC%" "%DEST%" >nul
-if errorlevel 1 ( echo [ERROR] Copy failed & exit /b 1 )
-exit /b 0
-
-:extract_and_find_asar
-set "IN_ARCHIVE=%~1"
-set "OUT_DIR=%~2"
-echo       Extracting archive...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '%IN_ARCHIVE%' -DestinationPath '%OUT_DIR%' -Force"
-if errorlevel 1 ( echo [ERROR] Extraction failed & exit /b 1 )
-call :find_app_asar "%OUT_DIR%"
-if not defined APP_ASAR ( echo [ERROR] app.asar not found & exit /b 1 )
-exit /b 0
-
-:find_app_asar
-set "SEARCH_DIR=%~1"
-set "APP_ASAR="
-for /f "delims=" %%I in ('dir /s /b "%SEARCH_DIR%\app.asar" 2^>nul ^| findstr /I /C:"\\Contents\\Resources\\app.asar"') do (
-  if not defined APP_ASAR set "APP_ASAR=%%~fI"
-)
-if not defined APP_ASAR (
-  for /f "delims=" %%I in ('dir /s /b "%SEARCH_DIR%\app.asar" 2^>nul') do (
-    if not defined APP_ASAR set "APP_ASAR=%%~fI"
-  )
-)
-if defined APP_ASAR echo       app.asar: %APP_ASAR%
-exit /b 0
 
 :extract_asar
 set "ASAR_FILE=%~1"
@@ -324,8 +309,6 @@ exit /b 0
 set "APP_TO_RUN=%~1"
 set "ELECTRON_RUN_AS_NODE="
 set "ELECTRON_FORCE_IS_PACKAGED=true"
-REM Uncomment for verbose renderer logging (debug only):
-REM set "ELECTRON_ENABLE_LOGGING=true"
 
 REM ---- Resolve Codex CLI binary ----
 call :find_codex_cli
@@ -372,16 +355,21 @@ REM USAGE / EXIT
 REM ============================================================================
 
 :usage
-echo Usage:
-echo   %~nx0 ^<mac_archive_or_url^>
 echo.
-echo   Extracts a Mac Codex .app archive and runs it on Windows via Electron.
-echo   Downloads precompiled native binaries where available.
-echo   Skips already-completed steps on re-run.
+echo Usage:
+echo   %~nx0 [path\to\Codex.app]
+echo.
+echo   Runs the macOS Codex Desktop app on Windows via Electron.
+echo.
+echo   If Codex.app is placed next to this script, no arguments are needed.
+echo   Otherwise, pass the path to the Codex.app folder.
+echo.
+echo   To get Codex.app, download the official DMG from OpenAI, open it,
+echo   and copy the Codex.app folder out.
 echo.
 echo Examples:
-echo   %~nx0 "C:\Downloads\Codex-mac-full.zip"
-echo   %~nx0 "https://example.com/Codex-mac.zip"
+echo   %~nx0
+echo   %~nx0 "C:\Downloads\Codex.app"
 echo.
 echo Working directory: %TEMP%\codex-electron-win
 echo   Delete this folder to force a fresh start.

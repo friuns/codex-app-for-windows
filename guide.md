@@ -205,34 +205,55 @@ Environment variables set:
 | app.asar unpacking | Working | Uses `@electron/asar` |
 | Electron version detection | Working | Reads from `package.json` |
 | better-sqlite3 | Working | Precompiled binary from GitHub |
-| node-pty | Partial | Windows prebuilds exist in node_modules; isolated install succeeded |
+| node-pty | Working | Compiled via `@electron/rebuild` (requires VS Build Tools) |
 | Codex CLI resolution | Working | Found via npm global prefix |
-| App launch | Working | Window appears, authenticates, loads UI |
-| Renderer process polyfill | Applied | `process` shim injected |
-| **Terminal/PTY** | **Failing** | `ReferenceError` in `ErrorBoundary:AppRoutes` after `terminal-create` |
+| App launch | **Working** | Window opens, authenticates, loads full UI |
+| Renderer process polyfill | **Working** | `process` shim injected into renderer |
+| Terminal/PTY | Working | Terminal attaches and shell spawns |
+| Thread management | Working | Conversations load, create, archive |
+| Authentication | Working | ChatGPT auth flow completes |
+| Git integration | Partial | Fails gracefully if workspace is not a git repo |
 
-### Known Issue: "Oops, an error has occurred"
+The app is fully functional on Windows.
 
-After the app launches, authenticates, and loads the main UI, it crashes with
-`[ErrorBoundary:AppRoutes] error(name=ReferenceError)` in the renderer process.
+### Resolved: "Oops, an error has occurred" Crash
 
-**Root cause analysis**:
-- The error occurs immediately after `terminal-create` / `terminal-attach` /
-  `terminal-resize` messages
-- The terminal manager in the main process uses `node-pty` to spawn a shell
-- Even though `node-pty` loads fine in Node.js, it may fail under Electron's
-  ABI (Node ABI 127 vs Electron ABI 143)
-- The crash could also be a missing global reference in the minified webview
-  code (`ReferenceError` = an identifier is used before it's defined)
-- The error string is `string(len=2734)` but the full stack trace is not
-  logged to the console
+The original crash (`[ErrorBoundary:AppRoutes] error(name=ReferenceError)`) was
+caused by the renderer process referencing the Node.js `process` global, which
+is not available in Electron's sandboxed renderer context.
 
-**Next steps to debug**:
-1. Test `node-pty` loading specifically under Electron's runtime
-2. Launch with `ELECTRON_ENABLE_LOGGING=true` and DevTools open
-3. Patch the ErrorBoundary to log the full stack trace instead of swallowing it
-4. Consider monkey-patching the terminal-create handler to gracefully degrade
-   when PTY spawn fails
+**Diagnosis method**: Setting `ELECTRON_ENABLE_LOGGING=true` surfaced the full
+error in the terminal:
+
+```
+"ReferenceError: process is not defined"
+  source: app://-/assets/index-BnRAGF7J.js (176)
+```
+
+**Root cause**: The Codex Desktop webview code accesses `process.cwd()`,
+`process.platform`, and other Node.js globals. In the official Mac Electron
+build these are available (likely via `nodeIntegration` or a build-time
+polyfill), but when running through a standalone Windows Electron via `npx`,
+the renderer is sandboxed and `process` is `undefined`.
+
+**Fix** (automated in step 5b of the launch script):
+
+1. **preload.js** -- Append code that captures `process` data in the preload
+   context (where Node.js is available) and exposes it to the renderer via
+   `contextBridge.exposeInMainWorld("__processShim", {...})`.
+
+2. **webview/index.html** -- Inject an inline `<script>` before the app bundle
+   that reconstructs `window.process` from the shim, including:
+   - `cwd()` as a function returning the captured working directory
+   - `nextTick()` shimmed via `setTimeout`
+   - Event emitter stubs (`on`, `off`, `emit`, etc.)
+
+3. **CSP update** -- The Content-Security-Policy `script-src` directive is
+   updated with the SHA-256 hash of the injected script so it passes the
+   integrity check.
+
+Both patches are idempotent (check for `__processShim` before applying) and
+cached via a `.win-process-patched` marker file.
 
 ---
 
@@ -241,8 +262,9 @@ After the app launches, authenticates, and loads the main UI, it crashes with
 ```
 codexwin/
 ├── launch_codex_mac_on_windows.cmd   (main porting script)
-├── .gitignore                         (excludes binaries and temp files)
-└── guide.md                           (this file)
+├── README.md                          (quick-start instructions)
+├── guide.md                           (this file -- deep technical guide)
+└── .gitignore                         (excludes binaries and temp files)
 ```
 
 Working directory (cached, not in repo):
@@ -285,9 +307,22 @@ launch_codex_mac_on_windows.cmd "C:\Downloads\Codex-mac-full.zip"
 `[ERROR:disk_cache.cc] Unable to create cache` -- cosmetic only, does not
 affect functionality. Caused by multiple Electron instances sharing cache dirs.
 
-### "Oops, an error has occurred"
-This is the `ErrorBoundary:AppRoutes` catching a `ReferenceError` in the
-renderer. See "Known Issue" section above.
+### "Oops, an error has occurred" / ReferenceError: process is not defined
+This was the main porting blocker. It is now fixed by the renderer patch
+(step 5b). If it reappears after a Codex update changes the webview bundle:
+```
+del "%TEMP%\codex-electron-win\app\.win-process-patched"
+```
+Then re-run the launch script to re-apply patches.
+
+### Renderer patch not applying
+If the CSP blocks the inline script (console shows "Refused to execute inline
+script"), the app bundle was updated and the CSP hash changed. Delete the
+patch marker and the app directory, then re-run from scratch:
+```
+del "%TEMP%\codex-electron-win\app\.win-process-patched"
+rmdir /s /q "%TEMP%\codex-electron-win\app"
+```
 
 ---
 
@@ -331,4 +366,17 @@ renderer. See "Known Issue" section above.
 
 6. **Renderer sandboxing matters.** The webview can't access `process` directly.
    A preload script + `contextBridge.exposeInMainWorld()` is the correct way
-   to pass Node.js data to the renderer.
+   to pass Node.js data to the renderer. But `contextBridge` only serializes
+   plain data -- functions are stripped. The workaround is a two-stage approach:
+   expose data from the preload, then reconstruct the API (with functions) via
+   an inline script in the HTML.
+
+7. **`ELECTRON_ENABLE_LOGGING=true` is essential for debugging.** Electron's
+   default logging truncates renderer console output. Setting this env var
+   surfaces full `console.error()` messages from the webview in the terminal,
+   which was the key to identifying `ReferenceError: process is not defined`.
+
+8. **CSP hashes must match exactly.** When injecting inline scripts into an
+   Electron app with a Content-Security-Policy, the SHA-256 hash of the script
+   content must be added to the `script-src` directive. Even a single byte
+   difference (whitespace, newline) will cause the script to be blocked.

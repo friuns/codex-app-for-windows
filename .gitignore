@@ -17,3 +17,5 @@ vs_buildtools.exe
 _check_app.ps1
 _setup_workdir.ps1
 _extract_cli_logic.ps1
+
+/video/

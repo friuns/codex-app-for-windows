@@ -4,7 +4,7 @@ Run the [OpenAI Codex Desktop](https://openai.com/index/introducing-codex/) app 
 
 ## Screenshots
 
-| Startup (30s) | Running |
+| Startup | Automations |
 |---|---|
 | ![Frame at 30 seconds](images/Cursor_giCQLZ2ZHl_40s_frame_30s.png) | ![Last frame](images/Cursor_giCQLZ2ZHl_40s_frame_last.png) |
 

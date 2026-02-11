@@ -2,21 +2,39 @@
 
 Run the [OpenAI Codex Desktop](https://openai.com/index/introducing-codex/) app on Windows by porting the official macOS Electron build.
 
-https://github.com/user-attachments/assets/7fa4ffce-8639-4c80-b791-3b45126ee4a7
+## Screenshots
 
-## Captured Frames
-
-| 30s frame | Last frame |
+| Startup (30s) | Running |
 |---|---|
 | ![Frame at 30 seconds](images/Cursor_giCQLZ2ZHl_40s_frame_30s.png) | ![Last frame](images/Cursor_giCQLZ2ZHl_40s_frame_last.png) |
 
-## TL;DR
+## Demo Video
+
+https://github.com/user-attachments/assets/7fa4ffce-8639-4c80-b791-3b45126ee4a7
+
+## Quick Start
+
+Run this once:
 
 ```cmd
 launch_codex_mac_on_windows.cmd
 ```
 
-The launcher auto-installs dependencies, extracts/unpacks Codex, patches for Windows, and runs the app.
+The launcher automatically installs dependencies, extracts/unpacks Codex, patches for Windows, and starts the app.
+
+> First run can take a few minutes. Later runs are much faster due to caching in `%TEMP%\codex-electron-win\`.
+
+Optional input paths:
+
+```cmd
+REM Use a DMG you already downloaded
+launch_codex_mac_on_windows.cmd "C:\Downloads\Codex.dmg"
+
+REM Use a pre-extracted Codex.app
+launch_codex_mac_on_windows.cmd "C:\Downloads\Codex.app"
+```
+
+Then sign in with your OpenAI / ChatGPT account (active Codex subscription required).
 
 ## Prerequisites
 
@@ -30,37 +48,13 @@ The launcher auto-installs dependencies, extracts/unpacks Codex, patches for Win
 | **Python 3.12** *(optional)* | Yes | Native module builds |
 | **VS Build Tools 2022** *(optional)* | Yes | `node-pty` compilation |
 
-> First run can take a few minutes. Later runs are fast due to caching in `%TEMP%\codex-electron-win\`.
-
-## Quick Start
-
-### 1. Launch
-
-```cmd
-launch_codex_mac_on_windows.cmd
-```
-
-Optional inputs:
-
-```cmd
-REM Use a DMG you already downloaded
-launch_codex_mac_on_windows.cmd "C:\Downloads\Codex.dmg"
-
-REM Use a pre-extracted Codex.app
-launch_codex_mac_on_windows.cmd "C:\Downloads\Codex.app"
-```
-
-### 2. Sign in
-
-Sign in with your OpenAI / ChatGPT account (active Codex subscription required).
-
 ## Re-run
 
 ```cmd
 launch_codex_mac_on_windows.cmd
 ```
 
-The script is idempotent and skips completed steps.
+The script is idempotent and skips already-completed steps.
 
 ## Update Codex
 
@@ -73,14 +67,14 @@ launch_codex_mac_on_windows.cmd
 
 ## Troubleshooting
 
-### App crashes ("Oops, an error has occurred")
+### App crashes (`Oops, an error has occurred`)
 
 ```cmd
 del "%TEMP%\codex-electron-win\app\.win-process-patched"
 launch_codex_mac_on_windows.cmd
 ```
 
-### "Codex CLI binary not found"
+### `Codex CLI binary not found`
 
 ```cmd
 npm install -g @openai/codex
@@ -117,8 +111,8 @@ launch_codex_mac_on_windows.cmd
 
 The launcher:
 
-1. Installs missing dependencies via `winget`/`npm`.
-2. Extracts `Codex.app` from DMG (if needed).
+1. Installs missing dependencies via `winget` and `npm`.
+2. Extracts `Codex.app` from a DMG (if needed).
 3. Unpacks `app.asar`.
 4. Rebuilds/replaces native modules for Windows (`better-sqlite3`, `node-pty`).
 5. Patches renderer process compatibility.
